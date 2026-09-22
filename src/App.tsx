@@ -137,7 +137,17 @@ export default function App() {
         }
       } else {
         setAuthUser(null);
-        setCurrentUser(null);
+        // If guest or offline session was active, restore from localStorage
+        const savedSession = localStorage.getItem('auragram_local_user');
+        if (savedSession) {
+          try {
+            setCurrentUser(JSON.parse(savedSession));
+          } catch {
+            setCurrentUser(null);
+          }
+        } else {
+          setCurrentUser(null);
+        }
       }
       setIsAuthLoading(false);
     });
@@ -669,6 +679,7 @@ export default function App() {
   // Real Logout from Firebase Auth
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('auragram_local_user');
       await signOut(auth);
       setAuthUser(null);
       setCurrentUser(null);
@@ -676,6 +687,9 @@ export default function App() {
       setSelectedViewedUser(null);
     } catch (err) {
       console.warn('Error during signOut', err);
+      localStorage.removeItem('auragram_local_user');
+      setAuthUser(null);
+      setCurrentUser(null);
     }
   };
 
@@ -858,10 +872,11 @@ export default function App() {
   }
 
   // 2. Unauthenticated Screen: Instagram-style Login, Register, Recovery
-  if (!authUser || !currentUser) {
+  if (!currentUser) {
     return (
       <AuthScreen 
         onAuthSuccess={(user) => {
+          localStorage.setItem('auragram_local_user', JSON.stringify(user));
           setCurrentUser(user);
         }} 
       />

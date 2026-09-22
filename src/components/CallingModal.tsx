@@ -41,20 +41,96 @@ const RTC_CONFIG: RTCConfiguration = {
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
-    { urls: 'stun:stun.services.mozilla.com' },
   ],
   iceCandidatePoolSize: 10,
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
 };
 
-// Optimize SDP for 0 delay (10ms audio packetization + inband FEC)
-function optimizeSdpForZeroLatency(sdp: string): string {
-  let modified = sdp;
-  if (modified.includes('m=audio')) {
-    modified = modified.replace(/(m=audio[^\r\n]*\r\n)/g, '$1a=ptime:10\r\na=maxptime:20\r\n');
+// Force H.264 codec preference on RTCPeerConnection video transceivers for zero-latency hardware decoding
+function forceH264Codecs(pc: RTCPeerConnection) {
+  try {
+    const getCaps =
+      typeof RTCRtpSender !== 'undefined' && 'getCapabilities' in RTCRtpSender
+        ? RTCRtpSender.getCapabilities('video')
+        : typeof RTCRtpReceiver !== 'undefined' && 'getCapabilities' in RTCRtpReceiver
+        ? RTCRtpReceiver.getCapabilities('video')
+        : null;
+
+    if (getCaps && Array.isArray(getCaps.codecs)) {
+      const h264 = getCaps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+      const others = getCaps.codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/h264');
+
+      if (h264.length > 0) {
+        const preferredCodecs = [...h264, ...others];
+        pc.getTransceivers().forEach((transceiver) => {
+          try {
+            const kind = transceiver.sender.track?.kind || transceiver.receiver.track?.kind;
+            if (kind === 'video' || transceiver.mid?.toLowerCase().includes('video')) {
+              if (typeof transceiver.setCodecPreferences === 'function') {
+                transceiver.setCodecPreferences(preferredCodecs);
+              }
+            }
+          } catch (e) {
+            // Non-fatal if setCodecPreferences is not supported in current state
+          }
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[WebRTC] forceH264Codecs warning:', err);
   }
-  return modified;
+}
+
+// Optimize SDP: Prioritize H.264 video codec and 10ms audio packetization for 0 delay
+function optimizeSdpForH264AndZeroLatency(sdp: string): string {
+  let lines = sdp.split('\r\n');
+  if (lines.length <= 1) {
+    lines = sdp.split('\n');
+  }
+
+  // 1. Locate all H.264 payload types from a=rtpmap:<pt> H264/90000
+  const h264Payloads: string[] = [];
+  lines.forEach((line) => {
+    const match = line.match(/^a=rtpmap:(\d+)\s+H264\/90000/i);
+    if (match && match[1]) {
+      h264Payloads.push(match[1]);
+    }
+  });
+
+  const output: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Video media description: prioritize H264 payloads in the media format list
+    if (line.startsWith('m=video')) {
+      if (h264Payloads.length > 0) {
+        const parts = line.split(' ');
+        if (parts.length > 3) {
+          const mHeader = parts.slice(0, 3); // ['m=video', port, proto]
+          const existingPayloads = parts.slice(3);
+          const nonH264 = existingPayloads.filter((pt) => !h264Payloads.includes(pt));
+          const h264InLine = h264Payloads.filter((pt) => existingPayloads.includes(pt));
+          line = [...mHeader, ...h264InLine, ...nonH264].join(' ');
+        }
+      }
+      output.push(line);
+      continue;
+    }
+
+    // Audio media description: inject low-latency packetization (10ms ptime)
+    if (line.startsWith('m=audio')) {
+      output.push(line);
+      output.push('a=ptime:10');
+      output.push('a=maxptime:20');
+      continue;
+    }
+
+    output.push(line);
+  }
+
+  return output.join('\r\n');
 }
 
 // Zero-Delay Engine: minimizes jitter buffer to 0ms and prioritizes live frame delivery
@@ -101,6 +177,9 @@ function enforceZeroDelay(pc: RTCPeerConnection) {
         } catch {}
       }
     });
+
+    // 3. Ensure H.264 is prioritized across transceivers
+    forceH264Codecs(pc);
   } catch (e) {
     console.warn('[WebRTC] Zero delay enforcement error', e);
   }
@@ -389,24 +468,31 @@ export const CallingModal: React.FC<CallingModalProps> = ({
     return `${mins.toString().padStart(2, '0')}:${remainingSec.toString().padStart(2, '0')}`;
   };
 
-  // Callback refs to instantly attach stream to video elements on mount and re-renders
+  // Callback refs to instantly attach stream to video elements on mount and re-renders with forced object-fit: cover
   const attachLocalVideo = (el: HTMLVideoElement | null) => {
     localVideoRef.current = el;
-    if (el && localStream) {
-      if (el.srcObject !== localStream) {
-        el.srcObject = localStream;
+    if (el) {
+      el.style.objectFit = 'cover';
+      if (localStream) {
+        if (el.srcObject !== localStream) {
+          el.srcObject = localStream;
+        }
+        el.play().catch(() => {});
       }
-      el.play().catch(() => {});
     }
   };
 
   const attachRemoteVideo = (el: HTMLVideoElement | null) => {
     remoteVideoRef.current = el;
-    if (el && remoteStream) {
-      if (el.srcObject !== remoteStream) {
-        el.srcObject = remoteStream;
+    if (el) {
+      el.style.objectFit = 'cover';
+      const activeStream = remoteStream || (remoteStreamHolderRef.current.getTracks().length > 0 ? remoteStreamHolderRef.current : null);
+      if (activeStream) {
+        if (el.srcObject !== activeStream) {
+          el.srcObject = activeStream;
+        }
+        el.play().catch(() => {});
       }
-      el.play().catch(() => {});
     }
   };
 
@@ -474,6 +560,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
         stream.getTracks().forEach((track) => {
           pc.addTrack(track, stream);
         });
+        forceH264Codecs(pc);
         enforceZeroDelay(pc);
 
         // Listen for Remote Tracks
@@ -584,14 +671,15 @@ export const CallingModal: React.FC<CallingModalProps> = ({
             }
           };
 
-          // Caller: Create and save Offer with zero delay optimization
+          // Caller: Create and save Offer with H.264 priority and zero delay optimization
+          forceH264Codecs(pc);
           const rawOffer = await pc.createOffer({
             offerToReceiveAudio: true,
             offerToReceiveVideo: isVideo,
           });
           const offerDescription = new RTCSessionDescription({
             type: rawOffer.type,
-            sdp: optimizeSdpForZeroLatency(rawOffer.sdp || ''),
+            sdp: optimizeSdpForH264AndZeroLatency(rawOffer.sdp || ''),
           });
           await pc.setLocalDescription(offerDescription);
 
@@ -661,10 +749,11 @@ export const CallingModal: React.FC<CallingModalProps> = ({
               await flushCandidateQueue();
               enforceZeroDelay(pc);
 
+              forceH264Codecs(pc);
               const rawAnswer = await pc.createAnswer();
               const answerDescription = new RTCSessionDescription({
                 type: rawAnswer.type,
-                sdp: optimizeSdpForZeroLatency(rawAnswer.sdp || ''),
+                sdp: optimizeSdpForH264AndZeroLatency(rawAnswer.sdp || ''),
               });
               await pc.setLocalDescription(answerDescription);
 
@@ -828,43 +917,130 @@ export const CallingModal: React.FC<CallingModalProps> = ({
     }
   };
 
-  // 4. Switch Camera (Frontal / Traseira)
+  // 4. Switch Camera (Frontal / Traseira) with permission persistence & black-screen guard
   const handleSwitchCamera = async () => {
     if (isCameraOff || isScreenSharing || !localStreamRef.current) return;
+
+    const previousFacing = facingMode;
+    const nextFacing = facingMode === 'user' ? 'environment' : 'user';
+    const oldTracks = localStreamRef.current.getVideoTracks();
+
     try {
-      const nextFacing = facingMode === 'user' ? 'environment' : 'user';
       setFacingMode(nextFacing);
 
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: { ideal: nextFacing },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 },
-        },
-      });
-      const newTrack = newStream.getVideoTracks()[0];
+      let newStream: MediaStream | null = null;
 
-      if (newTrack) {
+      // Strategy A: Direct acquisition with desired facingMode
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: nextFacing },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30, max: 60 },
+          },
+        });
+      } catch (errA) {
+        console.warn('FacingMode ideal direct switch failed, attempting device enumeration:', errA);
+
+        // Strategy B: Enumerate video input devices and pick alternate camera ID
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+          if (videoDevices.length > 1) {
+            const currentTrackSettings = oldTracks[0]?.getSettings?.();
+            const currentDeviceId = currentTrackSettings?.deviceId;
+            const alternate = videoDevices.find((d) => d.deviceId && d.deviceId !== currentDeviceId) || videoDevices[1];
+            if (alternate && alternate.deviceId) {
+              newStream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                  deviceId: { ideal: alternate.deviceId },
+                  width: { ideal: 1280 },
+                  height: { ideal: 720 },
+                },
+              });
+            }
+          }
+        } catch (errB) {
+          console.warn('Device enumeration fallback failed:', errB);
+        }
+
+        // Strategy C: If device hardware locks concurrent camera access (common on some Android/iOS chipsets),
+        // momentarily stop previous track and re-acquire immediately
+        if (!newStream) {
+          try {
+            oldTracks.forEach((t) => t.stop());
+            newStream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                facingMode: { ideal: nextFacing },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+            });
+          } catch (errC) {
+            console.warn('Clean camera reopen failed:', errC);
+          }
+        }
+      }
+
+      // If new camera stream was acquired successfully:
+      if (newStream && newStream.getVideoTracks().length > 0) {
+        const newTrack = newStream.getVideoTracks()[0];
         try {
           newTrack.contentHint = 'motion';
         } catch {}
-        localStreamRef.current.getVideoTracks().forEach((t) => t.stop());
-        localStreamRef.current.removeTrack(localStreamRef.current.getVideoTracks()[0]);
+
+        // Remove and stop old tracks cleanly
+        oldTracks.forEach((t) => {
+          localStreamRef.current?.removeTrack(t);
+          if (t.readyState === 'live') t.stop();
+        });
+
         localStreamRef.current.addTrack(newTrack);
+        const updatedStream = new MediaStream(localStreamRef.current.getTracks());
+        setLocalStream(updatedStream);
 
-        setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+        // Update local video element directly
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = updatedStream;
+          localVideoRef.current.play().catch(() => {});
+        }
 
+        // Replace track in WebRTC peer connection sender
         const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
         if (sender) {
           await sender.replaceTrack(newTrack);
           if (pcRef.current) enforceZeroDelay(pcRef.current);
         }
+
+        showToast(nextFacing === 'user' ? 'Câmera Frontal (0 Delay)' : 'Câmera Traseira (0 Delay)');
+        return;
       }
-      showToast(nextFacing === 'user' ? 'Câmera Frontal (0 Delay)' : 'Câmera Traseira (0 Delay)');
+
+      // If hardware could not switch (e.g. single camera laptop or restriction),
+      // NEVER leave the screen black: restore the camera stream immediately!
+      setFacingMode(previousFacing);
+
+      // If old tracks were ended during attempt, recover immediately with reliable stream
+      if (oldTracks.length === 0 || oldTracks.every((t) => t.readyState === 'ended')) {
+        const recoveryStream = await acquireMediaStream(true, previousFacing, contact?.username || 'user');
+        const recoveryTrack = recoveryStream.getVideoTracks()[0];
+        if (recoveryTrack) {
+          localStreamRef.current.addTrack(recoveryTrack);
+          const recovered = new MediaStream(localStreamRef.current.getTracks());
+          setLocalStream(recovered);
+          const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === 'video');
+          if (sender) {
+            await sender.replaceTrack(recoveryTrack);
+            if (pcRef.current) enforceZeroDelay(pcRef.current);
+          }
+        }
+      }
+      showToast('Câmera mantida ativa');
     } catch (err) {
-      console.warn('Error switching camera', err);
-      showToast('Não foi possível alternar a câmera neste aparelho');
+      console.warn('Switch camera error caught and handled safely:', err);
+      setFacingMode(previousFacing);
+      showToast('Câmera mantida ativa');
     }
   };
 
@@ -1003,7 +1179,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                     </span>
                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-bold tracking-wider uppercase border border-emerald-500/30 shadow-sm">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      0 Delay • Tempo Real
+                      WebRTC H.264 • 0 Delay
                     </span>
                   </>
                 )}
@@ -1069,12 +1245,13 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                     autoPlay
                     playsInline
                     muted
+                    style={{ objectFit: 'cover', width: '100%', height: '100%' }}
                     className={`w-full h-full object-cover transition-opacity duration-300 ${
-                      hasRemoteVideo ? 'opacity-100' : 'opacity-0'
+                      hasRemoteVideo || (remoteStream && remoteStream.getVideoTracks().length > 0) ? 'opacity-100' : 'opacity-0'
                     }`}
                   />
 
-                  {!hasRemoteVideo && (
+                  {!hasRemoteVideo && !(remoteStream && remoteStream.getVideoTracks().length > 0) && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-zinc-950 z-10 pointer-events-none">
                       <div className="w-20 h-20 sm:w-28 sm:h-28 rounded-full auragram-gradient p-1 mb-2 shadow-2xl animate-pulse">
                         <img
@@ -1091,7 +1268,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                   )}
 
                   <div className="absolute bottom-3 left-3 z-20 px-2.5 py-1 rounded-lg bg-black/60 backdrop-blur-md text-[11px] font-semibold text-white border border-white/10 flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${hasRemoteVideo ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`} />
+                    <span className={`w-2 h-2 rounded-full ${hasRemoteVideo || (remoteStream && remoteStream.getVideoTracks().length > 0) ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`} />
                     <span>{contact?.name}</span>
                   </div>
                 </div>
@@ -1103,6 +1280,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                     autoPlay
                     playsInline
                     muted
+                    style={{ objectFit: 'cover', width: '100%', height: '100%' }}
                     className={`w-full h-full object-cover transition-opacity duration-300 ${
                       !isCameraOff ? 'opacity-100' : 'opacity-0'
                     } ${
@@ -1139,11 +1317,12 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                         autoPlay
                         playsInline
                         muted
+                        style={{ objectFit: 'cover', width: '100%', height: '100%' }}
                         className={`w-full h-full object-cover transition-opacity duration-300 ${
-                          hasRemoteVideo ? 'opacity-100' : 'opacity-0'
+                          hasRemoteVideo || (remoteStream && remoteStream.getVideoTracks().length > 0) ? 'opacity-100' : 'opacity-0'
                         }`}
                       />
-                      {!hasRemoteVideo && (
+                      {!hasRemoteVideo && !(remoteStream && remoteStream.getVideoTracks().length > 0) && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center bg-zinc-950 z-10 pointer-events-none">
                           <div className="w-24 h-24 rounded-full auragram-gradient p-1 mb-2 shadow-2xl animate-pulse">
                             <img
@@ -1165,6 +1344,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                       autoPlay
                       playsInline
                       muted
+                      style={{ objectFit: 'cover', width: '100%', height: '100%' }}
                       className={`w-full h-full object-cover ${
                         !isScreenSharing && facingMode === 'user' ? 'transform -scale-x-100' : ''
                       }`}
@@ -1185,9 +1365,10 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                         autoPlay
                         playsInline
                         muted
-                        className={`w-full h-full object-cover ${hasRemoteVideo ? 'opacity-100' : 'opacity-0'}`}
+                        style={{ objectFit: 'cover', width: '100%', height: '100%' }}
+                        className={`w-full h-full object-cover ${hasRemoteVideo || (remoteStream && remoteStream.getVideoTracks().length > 0) ? 'opacity-100' : 'opacity-0'}`}
                       />
-                      {!hasRemoteVideo && (
+                      {!hasRemoteVideo && !(remoteStream && remoteStream.getVideoTracks().length > 0) && (
                         <div className="w-full h-full flex items-center justify-center bg-zinc-900 text-zinc-500">
                           <VideoOff className="w-6 h-6" />
                         </div>
@@ -1199,6 +1380,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
                       autoPlay
                       playsInline
                       muted
+                      style={{ objectFit: 'cover', width: '100%', height: '100%' }}
                       className={`w-full h-full object-cover ${
                         !isScreenSharing && facingMode === 'user' ? 'transform -scale-x-100' : ''
                       }`}
