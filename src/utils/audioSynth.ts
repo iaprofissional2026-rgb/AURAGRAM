@@ -167,6 +167,33 @@ class SoundEffects {
       });
     } catch {}
   }
+
+  // Real-time notification chime (Instagram / iOS style crystal ding)
+  playNotificationChime() {
+    try {
+      const ctx = this.getContext();
+      const now = ctx.currentTime;
+      
+      // Dual resonant bell tones
+      const freqs = [880, 1320];
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.05);
+
+        gain.gain.setValueAtTime(0.2, now + idx * 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.35);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start(now + idx * 0.05);
+        osc.stop(now + idx * 0.05 + 0.36);
+      });
+    } catch {}
+  }
 }
 
 export const sounds = new SoundEffects();

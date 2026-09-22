@@ -83,8 +83,10 @@ export interface ChatMessage {
   senderId: string;
   recipientId: string;
   participants?: string[];
-  type: 'text' | 'image' | 'voice';
+  type: 'text' | 'image' | 'voice' | 'video' | 'file';
   content: string; // text or media dataUrl
+  mediaName?: string;
+  mediaSize?: string;
   audioDuration?: number;
   timestamp: string;
   read: boolean;

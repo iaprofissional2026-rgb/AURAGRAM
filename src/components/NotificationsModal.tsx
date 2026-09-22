@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Heart, MessageCircle, UserPlus, Check, Sparkles, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Heart, MessageCircle, UserPlus, Check, Sparkles, X, Bell, BellRing, Volume2 } from 'lucide-react';
 import { NotificationItem } from '../types';
+import { notificationManager } from '../utils/notifications';
 
 interface NotificationsModalProps {
   notifications: NotificationItem[];
@@ -12,6 +13,23 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onClose,
 }) => {
   const [followingMap, setFollowingMap] = useState<Record<string, boolean>>({});
+  const [permState, setPermState] = useState<NotificationPermission>('default');
+
+  useEffect(() => {
+    setPermState(notificationManager.getPermission());
+  }, []);
+
+  const handleRequestPush = async () => {
+    const res = await notificationManager.requestPermission();
+    setPermState(res);
+    if (res === 'granted') {
+      notificationManager.trigger({
+        id: 'welcome_notif',
+        title: '🎉 Notificações AuraGram Ativadas!',
+        body: 'Você receberá avisos sonoros e em tela cheia para novas mensagens e chamadas em tempo real.',
+      });
+    }
+  };
 
   const toggleFollow = (userId: string) => {
     setFollowingMap((prev) => ({
@@ -22,9 +40,9 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-3xl p-5 shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-3xl p-5 shadow-2xl flex flex-col max-h-[85vh]">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
           <div className="flex items-center gap-2">
             <Heart className="w-5 h-5 text-pink-500 fill-pink-500" />
             <h3 className="text-sm font-bold text-white">Notificações</h3>
@@ -33,6 +51,27 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Real Notification Push Banner */}
+        {permState !== 'granted' && (
+          <div className="my-3 p-3 rounded-2xl bg-gradient-to-r from-pink-900/30 to-purple-900/30 border border-pink-500/40 flex items-center justify-between gap-2 shadow-sm">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="p-2 rounded-xl bg-pink-500/20 text-pink-400 shrink-0">
+                <BellRing className="w-4 h-4 animate-bounce-subtle" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-white truncate">Ativar Notificações Reais</p>
+                <p className="text-[10px] text-zinc-300 truncate">Receba toques e alertas ao receber chamadas ou mensagens</p>
+              </div>
+            </div>
+            <button
+              onClick={handleRequestPush}
+              className="px-3 py-1.5 rounded-xl auragram-gradient text-white text-[11px] font-bold shrink-0 hover:scale-105 active:scale-95 transition-transform"
+            >
+              Ativar
+            </button>
+          </div>
+        )}
 
         {/* Notifications List */}
         <div className="flex-1 overflow-y-auto divide-y divide-zinc-900 py-2 space-y-1">

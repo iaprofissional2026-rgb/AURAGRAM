@@ -13,7 +13,9 @@ import {
   Loader2, 
   LayoutGrid,
   SquareUser,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
+  Zap
 } from 'lucide-react';
 import { CallState } from '../types';
 import { sounds } from '../utils/audioSynth';
@@ -26,6 +28,46 @@ import {
   addDoc, 
   onSnapshot 
 } from '../firebase';
+
+export type CallQualityPreset = '1080p' | '720p' | 'fluid';
+
+export const QUALITY_CONFIGS: Record<CallQualityPreset, {
+  label: string;
+  tag: string;
+  bitrate: number;
+  width: number;
+  height: number;
+  fps: number;
+  degradation: 'maintain-resolution' | 'balanced' | 'maintain-framerate';
+}> = {
+  '1080p': {
+    label: 'Ultra HD 1080p',
+    tag: '1080p Ultra',
+    bitrate: 3500000,
+    width: 1920,
+    height: 1080,
+    fps: 30,
+    degradation: 'maintain-resolution',
+  },
+  '720p': {
+    label: 'HD Pro 720p',
+    tag: '720p HD',
+    bitrate: 2200000,
+    width: 1280,
+    height: 720,
+    fps: 30,
+    degradation: 'balanced',
+  },
+  'fluid': {
+    label: 'Fluído 0 Delay',
+    tag: '0 Delay',
+    bitrate: 1200000,
+    width: 854,
+    height: 480,
+    fps: 60,
+    degradation: 'maintain-framerate',
+  },
+};
 
 interface CallingModalProps {
   callState: CallState;
@@ -46,6 +88,53 @@ const RTC_CONFIG: RTCConfiguration = {
   bundlePolicy: 'max-bundle',
   rtcpMuxPolicy: 'require',
 };
+
+// Apply high quality parameters dynamically to WebRTC sender and hardware camera
+function applyCallQuality(
+  pc: RTCPeerConnection | null,
+  localStream: MediaStream | null,
+  quality: CallQualityPreset
+) {
+  const config = QUALITY_CONFIGS[quality];
+  if (!config) return;
+
+  // 1. Force hardware camera capture constraints
+  if (localStream) {
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (videoTrack && typeof videoTrack.applyConstraints === 'function') {
+      videoTrack.applyConstraints({
+        width: { ideal: config.width },
+        height: { ideal: config.height },
+        frameRate: { ideal: config.fps },
+      }).catch((e) => {
+        console.warn('[WebRTC] applyConstraints error', e);
+      });
+    }
+  }
+
+  // 2. Adjust WebRTC RTP Sender encodings for maximum bitrate and resolution
+  if (pc) {
+    pc.getSenders().forEach((sender) => {
+      if (sender.track?.kind === 'video') {
+        try {
+          const params = sender.getParameters();
+          if (params && params.encodings && params.encodings.length > 0) {
+            params.encodings[0].maxBitrate = config.bitrate;
+            params.encodings[0].networkPriority = 'high';
+            params.encodings[0].priority = 'high';
+            params.encodings[0].scaleResolutionDownBy = 1;
+            (params as any).degradationPreference = config.degradation;
+            sender.setParameters(params).catch(() => {});
+          }
+        } catch (e) {
+          console.warn('[WebRTC] setParameters quality error', e);
+        }
+      }
+    });
+
+    enforceZeroDelay(pc);
+  }
+}
 
 // Force H.264 codec preference on RTCPeerConnection video transceivers for zero-latency hardware decoding
 function forceH264Codecs(pc: RTCPeerConnection) {
@@ -429,6 +518,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
   const [layoutMode, setLayoutMode] = useState<'split' | 'pip'>('split');
   const [isSwappedPip, setIsSwappedPip] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [callQuality, setCallQuality] = useState<CallQualityPreset>('1080p');
 
   // Active streams stored in state to guarantee re-renders
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -459,6 +549,19 @@ export const CallingModal: React.FC<CallingModalProps> = ({
     setTimeout(() => {
       setToastMessage((cur) => (cur === msg ? null : cur));
     }, 3500);
+  };
+
+  // Cycle high-definition call quality preset
+  const handleCycleQuality = () => {
+    const cycleMap: Record<CallQualityPreset, CallQualityPreset> = {
+      '1080p': '720p',
+      '720p': 'fluid',
+      'fluid': '1080p',
+    };
+    const nextQ = cycleMap[callQuality];
+    setCallQuality(nextQ);
+    applyCallQuality(pcRef.current, localStreamRef.current, nextQ);
+    showToast(`Qualidade da Chamada: ${QUALITY_CONFIGS[nextQ].label}`);
   };
 
   // Format Duration seconds into mm:ss
@@ -1150,69 +1253,67 @@ export const CallingModal: React.FC<CallingModalProps> = ({
         className="relative w-full h-full flex flex-col justify-between overflow-hidden bg-zinc-950"
       >
         {/* Top Header Bar */}
-        <div className="absolute top-0 left-0 right-0 z-40 p-3 sm:p-5 flex items-center justify-between pointer-events-none bg-gradient-to-b from-black/80 via-black/40 to-transparent">
-          {/* Contact Details */}
-          <div className="pointer-events-auto flex items-center gap-2.5 sm:gap-3 px-3 py-2 sm:px-4 sm:py-2.5 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 shadow-lg max-w-[75vw]">
+        <div className="absolute top-0 left-0 right-0 z-40 p-2.5 sm:p-4 flex items-center justify-between pointer-events-none bg-gradient-to-b from-black/90 via-black/50 to-transparent gap-2">
+          {/* Contact Details Card */}
+          <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 px-2.5 py-1.5 sm:px-3.5 sm:py-2 rounded-2xl bg-black/75 backdrop-blur-xl border border-white/10 shadow-lg min-w-0 max-w-[58vw] sm:max-w-none">
             <div className="relative shrink-0">
               <img
                 src={contact?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200'}
                 alt={contact?.name || 'Contato'}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-pink-500/50"
+                className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-pink-500/50"
               />
-              <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border-2 border-black ${isConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+              <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-black ${isConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 overflow-hidden">
               <div className="flex items-center gap-1.5 truncate">
                 <span className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
                   {contact?.name || 'Contato AuraGram'}
                 </span>
-                <span className="text-[10px] sm:text-xs text-zinc-400 truncate">@{contact?.username}</span>
+                <span className="hidden sm:inline text-[10px] sm:text-xs text-zinc-400 truncate">@{contact?.username}</span>
               </div>
-              <div className="flex items-center gap-2 text-[10px] sm:text-xs flex-wrap">
-                <span className={`font-semibold ${isConnected ? 'text-emerald-400' : 'text-pink-400'}`}>
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-xs truncate">
+                <span className={`font-semibold shrink-0 ${isConnected ? 'text-emerald-400' : 'text-pink-400'}`}>
                   {callStatusText}
                 </span>
                 {isConnected && (
-                  <>
-                    <span className="text-zinc-400 font-mono">
-                      {formatDuration(callDuration)}
-                    </span>
-                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[9px] font-bold tracking-wider uppercase border border-emerald-500/30 shadow-sm">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      WebRTC H.264 • 0 Delay
-                    </span>
-                  </>
+                  <span className="text-zinc-400 font-mono shrink-0">
+                    • {formatDuration(callDuration)}
+                  </span>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Top Controls: Layout Toggle + Fullscreen */}
-          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
-            {/* View Mode Toggle: Split (50/50) vs PiP */}
+          {/* Top Controls: Quality Engine Switcher + Layout Toggle + Fullscreen */}
+          <div className="pointer-events-auto flex items-center gap-1 sm:gap-2 shrink-0">
+            {/* Call Quality Switcher Badge */}
+            <button
+              onClick={handleCycleQuality}
+              className="px-2 sm:px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-xl border border-pink-500/40 text-white text-[10px] sm:text-xs font-bold flex items-center gap-1 shadow-md hover:bg-zinc-900 active:scale-95 transition-all"
+              title="Alternar Qualidade de Vídeo (Ultra HD 1080p, HD 720p ou Fluído 0 Delay)"
+            >
+              <Zap className="w-3.5 h-3.5 text-pink-400 shrink-0 fill-pink-400" />
+              <span className="tracking-tight">{QUALITY_CONFIGS[callQuality].tag}</span>
+            </button>
+
+            {/* View Mode Toggle: Split vs PiP */}
             {isVideo && (
               <button
                 onClick={() => setLayoutMode(layoutMode === 'split' ? 'pip' : 'split')}
-                className="p-2 sm:p-2.5 rounded-xl bg-black/60 backdrop-blur-xl border border-white/10 text-zinc-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold"
-                title={layoutMode === 'split' ? 'Alternar para Modo Destaque (PiP)' : 'Alternar para Modo Dividido (50/50)'}
+                className="p-1.5 sm:p-2 rounded-xl bg-black/75 backdrop-blur-xl border border-white/10 text-zinc-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold"
+                title={layoutMode === 'split' ? 'Alternar para Modo Destaque (PiP)' : 'Alternar para Modo Dividido'}
               >
                 {layoutMode === 'split' ? (
-                  <>
-                    <SquareUser className="w-4 h-4 text-pink-400" />
-                    <span className="hidden sm:inline">Destaque</span>
-                  </>
+                  <SquareUser className="w-4 h-4 text-pink-400" />
                 ) : (
-                  <>
-                    <LayoutGrid className="w-4 h-4 text-indigo-400" />
-                    <span className="hidden sm:inline">Dividido</span>
-                  </>
+                  <LayoutGrid className="w-4 h-4 text-indigo-400" />
                 )}
               </button>
             )}
 
             <button
               onClick={handleToggleFullscreen}
-              className="p-2 sm:p-2.5 rounded-xl bg-black/60 backdrop-blur-xl border border-white/10 text-zinc-300 hover:text-white transition-colors"
+              className="p-1.5 sm:p-2 rounded-xl bg-black/75 backdrop-blur-xl border border-white/10 text-zinc-300 hover:text-white transition-colors"
               title="Tela cheia"
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
@@ -1429,13 +1530,13 @@ export const CallingModal: React.FC<CallingModalProps> = ({
           )}
         </div>
 
-        {/* Bottom Call Controls Bar (Fixed, Touch-friendly & High-contrast) */}
-        <div className="relative z-40 p-4 sm:p-6 flex items-center justify-center bg-gradient-to-t from-black via-black/80 to-transparent pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <div className="flex items-center gap-2.5 sm:gap-4 px-4 py-3 sm:px-6 sm:py-3.5 rounded-full bg-zinc-900/95 backdrop-blur-2xl border border-zinc-700/80 shadow-2xl max-w-full overflow-x-auto">
+        {/* Bottom Call Controls Bar (Touch-friendly, high-contrast, perfectly responsive on all phones) */}
+        <div className="relative z-40 p-3 sm:p-5 flex items-center justify-center bg-gradient-to-t from-black via-black/85 to-transparent pb-[calc(1.2rem+env(safe-area-inset-bottom))]">
+          <div className="flex items-center gap-2 sm:gap-3.5 px-3 py-2 sm:px-5 sm:py-3 rounded-full bg-zinc-900/95 backdrop-blur-2xl border border-zinc-700/80 shadow-2xl shrink-0">
             {/* 1. Mute / Unmute Mic */}
             <button
               onClick={handleToggleMute}
-              className={`p-3 sm:p-3.5 rounded-full transition-all shrink-0 ${
+              className={`p-2.5 sm:p-3.5 rounded-full transition-all shrink-0 ${
                 isMuted
                   ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30'
                   : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white'
@@ -1449,7 +1550,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
             {isVideo && (
               <button
                 onClick={handleToggleCamera}
-                className={`p-3 sm:p-3.5 rounded-full transition-all shrink-0 ${
+                className={`p-2.5 sm:p-3.5 rounded-full transition-all shrink-0 ${
                   isCameraOff
                     ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30'
                     : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white'
@@ -1464,7 +1565,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
             {isVideo && !isCameraOff && !isScreenSharing && (
               <button
                 onClick={handleSwitchCamera}
-                className="p-3 sm:p-3.5 rounded-full bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white transition-all shrink-0"
+                className="p-2.5 sm:p-3.5 rounded-full bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white transition-all shrink-0"
                 title="Trocar Câmera (Frontal / Traseira)"
               >
                 <SwitchCamera className="w-5 h-5" />
@@ -1474,7 +1575,7 @@ export const CallingModal: React.FC<CallingModalProps> = ({
             {/* 4. Screen Sharing */}
             <button
               onClick={handleToggleScreenShare}
-              className={`p-3 sm:p-3.5 rounded-full transition-all shrink-0 ${
+              className={`p-2.5 sm:p-3.5 rounded-full transition-all shrink-0 ${
                 isScreenSharing
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/40 ring-2 ring-indigo-400 animate-pulse'
                   : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white'
@@ -1487,11 +1588,11 @@ export const CallingModal: React.FC<CallingModalProps> = ({
             {/* 5. End Call Button */}
             <button
               onClick={handleEndCall}
-              className="p-3 sm:p-3.5 px-5 sm:px-6 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center gap-2 shadow-xl shadow-rose-600/40 hover:scale-105 active:scale-95 transition-all shrink-0"
+              className="p-2.5 sm:p-3.5 px-4 sm:px-6 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-bold flex items-center gap-1.5 sm:gap-2 shadow-xl shadow-rose-600/40 hover:scale-105 active:scale-95 transition-all shrink-0"
               title="Encerrar Chamada"
             >
               <PhoneOff className="w-5 h-5" />
-              <span className="hidden sm:inline text-xs">Encerrar</span>
+              <span className="text-xs font-semibold">Encerrar</span>
             </button>
           </div>
         </div>

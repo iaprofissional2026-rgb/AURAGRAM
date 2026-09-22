@@ -48,8 +48,9 @@ import { CallingModal } from './components/CallingModal';
 import { IncomingCallModal } from './components/IncomingCallModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { PostDetailModal } from './components/PostDetailModal';
-import { Sparkles, Loader2 } from 'lucide-react';
+import { Sparkles, Loader2, Bell, X, PhoneCall, MessageSquare } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { notificationManager, AppNotification } from './utils/notifications';
 
 export default function App() {
   // Real Firebase Auth & User State
@@ -88,6 +89,21 @@ export default function App() {
     isScreenSharing: false,
     duration: 0,
   });
+
+  // Active floating in-app notification toast
+  const [activeToast, setActiveToast] = useState<AppNotification | null>(null);
+
+  // Subscribe to Notification Manager for in-app toasts
+  useEffect(() => {
+    const unsub = notificationManager.subscribe((notif) => {
+      setActiveToast(notif);
+      const timer = setTimeout(() => {
+        setActiveToast((prev) => (prev?.id === notif.id ? null : prev));
+      }, 5000);
+      return () => clearTimeout(timer);
+    });
+    return unsub;
+  }, []);
 
   // Dark mode class sync
   useEffect(() => {
@@ -329,6 +345,15 @@ export default function App() {
               },
               type: data.type || 'video',
               createdAt: data.createdAt,
+            });
+
+            // Dispatch real system + sound notification
+            notificationManager.trigger({
+              id: `call_${callDoc.id}`,
+              title: `📞 Chamada de ${data.callerName || data.callerUsername || 'Contato'}`,
+              body: `Chamada de ${data.type === 'video' ? 'vídeo em HD' : 'voz'} em andamento no AuraGram`,
+              avatar: data.callerAvatar,
+              type: 'call',
             });
           }
         } else {
@@ -618,11 +643,10 @@ export default function App() {
   ) => {
     if (!currentUser) return;
 
-    // Check if following recipient
+    // Check if following recipient - if not, auto follow smoothly
     const isFollowing = (currentUser.following || []).includes(recipientId);
     if (!isFollowing) {
-      alert('Você só pode enviar mensagens para quem estiver seguindo no AuraGram!');
-      return;
+      handleFollowUser(recipientId);
     }
 
     const date = new Date();
@@ -649,6 +673,8 @@ export default function App() {
         participants: [currentUser.id, recipientId],
         type: messageData.type,
         content: messageData.content,
+        mediaName: messageData.mediaName || null,
+        mediaSize: messageData.mediaSize || null,
         audioDuration: messageData.audioDuration || null,
         timestamp,
         createdAt: serverTimestamp(),
@@ -697,11 +723,10 @@ export default function App() {
   const handleStartCall = async (contact: User, type: 'voice' | 'video') => {
     if (!currentUser) return;
 
-    // Must be following contact to initiate a call
+    // Auto follow contact if not followed yet
     const isFollowing = (currentUser.following || []).includes(contact.id);
     if (!isFollowing) {
-      alert(`Você só pode ligar para quem estiver seguindo no AuraGram! Siga @${contact.username} primeiro.`);
-      return;
+      handleFollowUser(contact.id);
     }
 
     const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -885,7 +910,49 @@ export default function App() {
 
   // 3. Authenticated Application
   return (
-    <div className="min-h-screen bg-black text-white selection:bg-pink-500 selection:text-white flex flex-col md:flex-row">
+    <div className="min-h-screen bg-black text-white selection:bg-pink-500 selection:text-white flex flex-col md:flex-row relative">
+      {/* Floating In-App Notification Toast */}
+      {activeToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92vw] max-w-md animate-fade-in pointer-events-auto">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-zinc-900/95 backdrop-blur-2xl border border-pink-500/50 shadow-2xl flex items-center justify-between gap-3 text-white ring-1 ring-pink-500/20">
+            <div 
+              className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
+              onClick={() => {
+                if (activeToast.type === 'message') {
+                  setCurrentTab('messages');
+                } else if (activeToast.type === 'call') {
+                  // already handled by incoming modal
+                } else {
+                  setShowNotificationsModal(true);
+                }
+                setActiveToast(null);
+              }}
+            >
+              {activeToast.avatar ? (
+                <img src={activeToast.avatar} alt="Notif" className="w-10 h-10 rounded-full object-cover ring-2 ring-pink-500 shrink-0" />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
+                  <Bell className="w-5 h-5 animate-bounce-subtle" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-white truncate">{activeToast.title}</p>
+                <p className="text-[11px] text-zinc-300 truncate">{activeToast.body}</p>
+              </div>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setActiveToast(null);
+              }}
+              className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Navigation (Sidebar Desktop & Top/Bottom Bar Mobile) */}
       <Navigation
         currentTab={currentTab}

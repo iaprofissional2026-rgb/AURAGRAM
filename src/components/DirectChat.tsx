@@ -24,12 +24,47 @@ import {
   Trash2,
   Radio,
   RotateCcw,
-  Volume2
+  Volume2,
+  Film,
+  ExternalLink,
+  FileText
 } from 'lucide-react';
 import { User, ChatMessage } from '../types';
 import { sounds } from '../utils/audioSynth';
 import { compressImage } from '../utils/imageCompress';
 import { VoiceMessagePlayer } from './VoiceMessagePlayer';
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderMessageContentWithLinks(text: string, isMe: boolean) {
+  const urlRegex = /(https?:\/\/[^\s]+)/gi;
+  const parts = text.split(urlRegex);
+
+  return parts.map((part, index) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={index}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className={`inline-flex items-center gap-1 font-semibold underline underline-offset-2 break-all ${
+            isMe ? 'text-pink-100 hover:text-white' : 'text-pink-400 hover:text-pink-300'
+          }`}
+        >
+          <span>{part}</span>
+          <ExternalLink className="w-3.5 h-3.5 inline-block shrink-0" />
+        </a>
+      );
+    }
+    return <span key={index}>{part}</span>;
+  });
+}
 
 interface DirectChatProps {
   currentUser: User;
@@ -111,7 +146,12 @@ export const DirectChat: React.FC<DirectChatProps> = ({
   // Send Text Message
   const handleSendText = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!selectedContact || !inputText.trim() || !isFollowing) return;
+    if (!selectedContact || !inputText.trim()) return;
+
+    // Auto follow if not already following so user profile and contacts remain linked
+    if (!isFollowing && onFollowUser) {
+      onFollowUser(selectedContact.id);
+    }
 
     onSendMessage(selectedContact.id, {
       senderId: currentUser.id,
@@ -127,7 +167,10 @@ export const DirectChat: React.FC<DirectChatProps> = ({
 
   // Send Quick Heart Like (Instagram feature when input is empty)
   const handleSendHeart = () => {
-    if (!selectedContact || !isFollowing) return;
+    if (!selectedContact) return;
+    if (!isFollowing && onFollowUser) {
+      onFollowUser(selectedContact.id);
+    }
     onSendMessage(selectedContact.id, {
       senderId: currentUser.id,
       recipientId: selectedContact.id,
@@ -154,22 +197,86 @@ export const DirectChat: React.FC<DirectChatProps> = ({
     setHoveredMessageId(null);
   };
 
-  // Send Image Attachment
+  // Send Image, Video, or Audio Attachment
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedContact || !isFollowing) return;
+    if (!file || !selectedContact) return;
+
+    if (!isFollowing && onFollowUser) {
+      onFollowUser(selectedContact.id);
+    }
 
     try {
-      const compressed = await compressImage(file, 1080, 0.82);
-      onSendMessage(selectedContact.id, {
-        senderId: currentUser.id,
-        recipientId: selectedContact.id,
-        type: 'image',
-        content: compressed,
-      });
-      sounds.playLikePop();
+      if (file.type.startsWith('image/')) {
+        // Compress image for high quality and fast delivery
+        const compressed = await compressImage(file, 1280, 0.85);
+        onSendMessage(selectedContact.id, {
+          senderId: currentUser.id,
+          recipientId: selectedContact.id,
+          type: 'image',
+          content: compressed,
+          mediaName: file.name,
+          mediaSize: formatFileSize(file.size),
+        });
+        sounds.playLikePop();
+      } else if (file.type.startsWith('video/')) {
+        // High-definition video message
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (reader.result && typeof reader.result === 'string') {
+            onSendMessage(selectedContact.id, {
+              senderId: currentUser.id,
+              recipientId: selectedContact.id,
+              type: 'video',
+              content: reader.result,
+              mediaName: file.name,
+              mediaSize: formatFileSize(file.size),
+            });
+            sounds.playLikePop();
+          }
+        };
+        reader.readAsDataURL(file);
+      } else if (file.type.startsWith('audio/')) {
+        // Audio file message
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (reader.result && typeof reader.result === 'string') {
+            onSendMessage(selectedContact.id, {
+              senderId: currentUser.id,
+              recipientId: selectedContact.id,
+              type: 'voice',
+              content: reader.result,
+              mediaName: file.name,
+              mediaSize: formatFileSize(file.size),
+            });
+            sounds.playLikePop();
+          }
+        };
+        reader.readAsDataURL(file);
+      } else {
+        // Generic document / file
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (reader.result && typeof reader.result === 'string') {
+            onSendMessage(selectedContact.id, {
+              senderId: currentUser.id,
+              recipientId: selectedContact.id,
+              type: 'file',
+              content: reader.result,
+              mediaName: file.name,
+              mediaSize: formatFileSize(file.size),
+            });
+            sounds.playLikePop();
+          }
+        };
+        reader.readAsDataURL(file);
+      }
     } catch (err) {
-      console.warn('Error compressing chat image', err);
+      console.warn('Error handling uploaded chat file', err);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -195,8 +302,10 @@ export const DirectChat: React.FC<DirectChatProps> = ({
 
   // High-Definition Studio Audio Recording
   const startRecording = async () => {
-    if (!isFollowing) return;
     try {
+      if (!isFollowing && onFollowUser && selectedContact) {
+        onFollowUser(selectedContact.id);
+      }
       // Clear previous preview if any
       setRecordedAudioPreview(null);
 
@@ -349,12 +458,12 @@ export const DirectChat: React.FC<DirectChatProps> = ({
   };
 
   return (
-    <div className="w-full h-[calc(100vh-4.5rem)] md:h-[calc(100vh-3rem)] max-w-6xl mx-auto flex rounded-2xl md:rounded-3xl border border-zinc-800/80 bg-zinc-950 overflow-hidden shadow-2xl relative">
-      {/* Hidden File Picker */}
+    <div className="w-full h-[calc(100dvh-7.5rem)] md:h-[calc(100dvh-2.5rem)] max-w-6xl mx-auto flex rounded-2xl md:rounded-3xl border border-zinc-800/80 bg-zinc-950 overflow-hidden shadow-2xl relative">
+      {/* Hidden File Picker: supports images, videos, audio notes and files */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*,audio/*"
         onChange={handleFileUpload}
         className="hidden"
       />
@@ -669,9 +778,48 @@ export const DirectChat: React.FC<DirectChatProps> = ({
                             src={msg.content}
                             alt="Attachment"
                             onClick={() => setPreviewImage(msg.content)}
-                            className="max-h-72 object-cover rounded-2xl hover:opacity-95 transition-opacity"
+                            className="max-h-72 w-full object-cover rounded-2xl hover:opacity-95 transition-opacity"
                           />
+                          {msg.mediaName && (
+                            <p className="text-[11px] opacity-80 mt-1 truncate">{msg.mediaName} {msg.mediaSize && `(${msg.mediaSize})`}</p>
+                          )}
                         </div>
+                      )}
+
+                      {/* Video Message */}
+                      {msg.type === 'video' && (
+                        <div className="rounded-2xl overflow-hidden my-1 max-w-full">
+                          <video
+                            src={msg.content}
+                            controls
+                            playsInline
+                            className="max-h-72 w-full rounded-2xl bg-black object-contain"
+                          />
+                          {msg.mediaName && (
+                            <p className="text-[11px] opacity-80 mt-1 truncate">{msg.mediaName} {msg.mediaSize && `(${msg.mediaSize})`}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Generic File Attachment */}
+                      {msg.type === 'file' && (
+                        <a
+                          href={msg.content}
+                          download={msg.mediaName || 'arquivo'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`flex items-center gap-2.5 p-2.5 rounded-2xl my-1 transition-colors ${
+                            isMe ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-zinc-700/60 hover:bg-zinc-700 text-zinc-100'
+                          }`}
+                        >
+                          <div className="p-2 rounded-xl bg-pink-500/20 text-pink-300">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold truncate">{msg.mediaName || 'Arquivo Anexo'}</p>
+                            <p className="text-[10px] opacity-70">{msg.mediaSize || 'Baixar arquivo'}</p>
+                          </div>
+                        </a>
                       )}
 
                       {/* High-Definition Voice Note Audio Player */}
@@ -683,10 +831,10 @@ export const DirectChat: React.FC<DirectChatProps> = ({
                         />
                       )}
 
-                      {/* Text Message Content */}
+                      {/* Text Message Content with Clickable Links */}
                       {msg.type === 'text' && (
                         <p className="text-sm sm:text-base leading-relaxed break-words whitespace-pre-wrap">
-                          {msg.content}
+                          {renderMessageContentWithLinks(msg.content, isMe)}
                         </p>
                       )}
 
