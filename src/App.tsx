@@ -274,33 +274,84 @@ export default function App() {
       where('participants', 'array-contains', authUser.uid)
     );
 
+    let isInitialLoad = true;
+
     const unsub = onSnapshot(messagesQuery, (snapshot) => {
+      // Check for newly added incoming messages after initial load
+      if (!isInitialLoad) {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            if (data.senderId && data.senderId !== authUser.uid) {
+              const senderUser = registeredUsers.find((u) => u.id === data.senderId) || CONTACTS.find((u) => u.id === data.senderId);
+              const preview = data.type === 'image' 
+                ? '📷 Foto' 
+                : data.type === 'voice' 
+                ? '🎙️ Mensagem de áudio' 
+                : data.type === 'video' 
+                ? '📹 Vídeo' 
+                : data.type === 'file'
+                ? '📎 Arquivo'
+                : data.content;
+
+              notificationManager.trigger({
+                id: `msg_${change.doc.id}`,
+                title: `💬 @${senderUser?.username || 'Novo Contato'}`,
+                body: preview,
+                avatar: senderUser?.avatar,
+                type: 'message',
+              });
+            }
+          }
+        });
+      }
+      isInitialLoad = false;
+
       const map: Record<string, ChatMessage[]> = {};
       snapshot.forEach((d) => {
         const data = d.data();
-        const otherUserId = data.participants.find((id: string) => id !== authUser.uid);
+        const otherUserId = data.participants?.find((id: string) => id !== authUser.uid);
         if (otherUserId) {
           if (!map[otherUserId]) map[otherUserId] = [];
+          
+          let millis = data.createdAtMillis;
+          if (!millis && data.createdAt?.toMillis) {
+            millis = data.createdAt.toMillis();
+          } else if (!millis && data.createdAt?.seconds) {
+            millis = data.createdAt.seconds * 1000;
+          } else if (!millis) {
+            millis = 0;
+          }
+
           map[otherUserId].push({
             id: d.id,
             senderId: data.senderId,
             recipientId: data.recipientId,
             type: data.type || 'text',
             content: data.content,
+            mediaName: data.mediaName,
+            mediaSize: data.mediaSize,
             timestamp: data.timestamp || 'agora',
+            createdAtMillis: millis,
             read: data.read ?? true,
             audioDuration: data.audioDuration,
             reaction: data.reaction,
           });
         }
       });
+
+      // Sort messages strictly in chronological ascending order (oldest at top, newest at bottom)
+      Object.keys(map).forEach((uid) => {
+        map[uid].sort((a, b) => (a.createdAtMillis || 0) - (b.createdAtMillis || 0));
+      });
+
       setMessagesMap(map);
     }, (err) => {
       console.warn('Error listening to messages', err);
     });
 
     return () => unsub();
-  }, [authUser?.uid]);
+  }, [authUser?.uid, registeredUsers]);
 
   // 7. Real-time listener for incoming WebRTC calls addressed to current user
   useEffect(() => {
@@ -649,22 +700,28 @@ export default function App() {
       handleFollowUser(recipientId);
     }
 
-    const date = new Date();
+    const now = Date.now();
+    const date = new Date(now);
     const timestamp = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-    const localId = `msg_${Date.now()}`;
+    const localId = `msg_${now}_${Math.random().toString(36).slice(2, 6)}`;
 
     const newMsg: ChatMessage = {
       id: localId,
       timestamp,
+      createdAtMillis: now,
       read: true,
       ...messageData,
     };
 
-    // Optimistic UI update
-    setMessagesMap((prev) => ({
-      ...prev,
-      [recipientId]: [...(prev[recipientId] || []), newMsg],
-    }));
+    // Optimistic UI update: strictly sorted in ascending chronological order
+    setMessagesMap((prev) => {
+      const prevList = prev[recipientId] || [];
+      const updated = [...prevList, newMsg].sort((a, b) => (a.createdAtMillis || 0) - (b.createdAtMillis || 0));
+      return {
+        ...prev,
+        [recipientId]: updated,
+      };
+    });
 
     try {
       await addDoc(collection(db, 'messages'), {
@@ -677,6 +734,7 @@ export default function App() {
         mediaSize: messageData.mediaSize || null,
         audioDuration: messageData.audioDuration || null,
         timestamp,
+        createdAtMillis: now,
         createdAt: serverTimestamp(),
         read: false,
       });

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Search, 
   Phone, 
@@ -115,7 +115,11 @@ export const DirectChat: React.FC<DirectChatProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const recordIntervalRef = useRef<number | null>(null);
 
-  const currentMessages = selectedContact ? (messagesMap[selectedContact.id] || []) : [];
+  const currentMessages = useMemo(() => {
+    if (!selectedContact) return [];
+    const list = messagesMap[selectedContact.id] || [];
+    return [...list].sort((a, b) => (a.createdAtMillis || 0) - (b.createdAtMillis || 0));
+  }, [selectedContact, messagesMap]);
 
   // Check if currentUser is following selectedContact in the app
   const isFollowing = Boolean(
@@ -125,10 +129,13 @@ export const DirectChat: React.FC<DirectChatProps> = ({
     )
   );
 
-  // Auto scroll to bottom
+  // Auto scroll to bottom smoothly when messages or active contact changes
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [currentMessages.length, selectedContact?.id]);
+    const timeout = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 50);
+    return () => clearTimeout(timeout);
+  }, [currentMessages, selectedContact?.id]);
 
   // Update selected contact if prop changes
   useEffect(() => {
@@ -740,7 +747,7 @@ export const DirectChat: React.FC<DirectChatProps> = ({
             </div>
 
             {/* Messages List */}
-            {currentMessages.map((msg) => {
+            {currentMessages.map((msg: ChatMessage) => {
               const isMe = msg.senderId === currentUser.id;
               const isHovered = hoveredMessageId === msg.id;
 

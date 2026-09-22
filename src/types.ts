@@ -90,7 +90,8 @@ export interface ChatMessage {
   audioDuration?: number;
   timestamp: string;
   read: boolean;
-  createdAt?: string;
+  createdAtMillis?: number;
+  createdAt?: any;
   reaction?: string;
   reactions?: Record<string, string>; // userId -> emoji
 }
