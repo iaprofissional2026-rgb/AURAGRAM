@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with Instagram-like metadata and followers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "username": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" },
+        "bio": { "type": "string" },
+        "website": { "type": "string" },
+        "followersCount": { "type": "number" },
+        "followingCount": { "type": "number" },
+        "postsCount": { "type": "number" },
+        "isOnline": { "type": "boolean" },
+        "following": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "username", "name"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "Social media post with media, captions, likes, and comments",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorUsername": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "mediaType": { "type": "string", "enum": ["image", "video"] },
+        "caption": { "type": "string" },
+        "filter": { "type": "string" },
+        "location": { "type": "string" },
+        "musicTrack": { "type": "string" },
+        "likesCount": { "type": "number" },
+        "likes": { "type": "array" },
+        "commentsCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "authorId", "authorUsername", "mediaUrl", "mediaType"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment left on a post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "postId": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "postId", "userId", "username", "text"]
+    },
+    "Story": {
+      "title": "Story",
+      "description": "Ephemeral story published by user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorUsername": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "authorName": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "mediaType": { "type": "string", "enum": ["image", "video"] },
+        "filter": { "type": "string" },
+        "caption": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "authorId", "authorUsername", "mediaUrl"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Direct message between two users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "participants": { "type": "array" },
+        "type": { "type": "string", "enum": ["text", "image", "voice"] },
+        "content": { "type": "string" },
+        "audioDuration": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "read": { "type": "boolean" }
+      },
+      "required": ["id", "senderId", "recipientId", "participants", "type", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Registered user accounts and profiles"
+    },
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Feed publications"
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on posts"
+    },
+    "/stories/{storyId}": {
+      "schema": "Story",
+      "description": "User stories"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Direct chat messages"
+    }
+  }
+}

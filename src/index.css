@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Hide scrollbar on mobile horizontal stories */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Story gradient borders */
+.instagram-gradient {
+  background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%);
+}
+
+.auragram-gradient {
+  background: linear-gradient(135deg, #FF3366 0%, #BA24D5 50%, #6366F1 100%);
+}
+
+.auragram-text-gradient {
+  background: linear-gradient(135deg, #FF3366 0%, #BA24D5 50%, #6366F1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Filter styles for real CSS image rendering */
+.filter-clarendon {
+  filter: contrast(1.2) saturate(1.25);
+}
+.filter-juno {
+  filter: contrast(1.15) saturate(1.4) hue-rotate(-10deg);
+}
+.filter-ludwig {
+  filter: contrast(1.05) saturate(1.1) brightness(1.05);
+}
+.filter-valencia {
+  filter: contrast(1.08) brightness(1.08) sepia(0.2);
+}
+.filter-slumber {
+  filter: saturate(0.66) brightness(1.05);
+}
+.filter-bw {
+  filter: grayscale(1) contrast(1.2);
+}
+.filter-cyberpunk {
+  filter: contrast(1.3) saturate(1.5) hue-rotate(180deg);
+}
+.filter-cinematic {
+  filter: contrast(1.15) brightness(0.95) saturate(1.2);
+}
+

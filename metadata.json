@@ -1,0 +1,10 @@
+{
+  "name": "AuraGram - Social & Live Calls",
+  "description": "Next-generation social network with feed, stories, reels, real camera capture, voice notes, and live HD video and audio calling.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
