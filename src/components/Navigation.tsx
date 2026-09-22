@@ -150,13 +150,13 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span className="font-semibold text-white">Criar Publicação</span>
           </button>
 
-          {/* Quick Live Call Action */}
+          {/* Quick Messages / Call Navigation */}
           <button
-            onClick={onOpenQuickCall}
-            className="w-full flex items-center gap-4 px-3.5 py-3 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-pink-600/30 to-purple-600/30 border border-pink-500/30 hover:border-pink-500/60 transition-all group shadow-sm"
+            onClick={() => setCurrentTab('messages')}
+            className="w-full flex items-center gap-4 px-3.5 py-3 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-pink-600/20 to-purple-600/20 border border-pink-500/30 hover:border-pink-500/60 transition-all group shadow-sm"
           >
             <Video className="w-6 h-6 text-pink-400 group-hover:scale-110 transition-transform" />
-            <span className="font-semibold">Chamada ao Vivo</span>
+            <span className="font-semibold">Conversas & Chamadas</span>
           </button>
 
           <button
@@ -212,14 +212,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         </button>
 
         <div className="flex items-center gap-3">
-          <button 
-            onClick={onOpenQuickCall}
-            aria-label="Chamada de Vídeo"
-            className="p-2 text-zinc-300 hover:text-pink-500 transition-colors"
-          >
-            <Video className="w-6 h-6" />
-          </button>
-
           <button 
             onClick={() => setCurrentTab('notifications')}
             aria-label="Notificações"

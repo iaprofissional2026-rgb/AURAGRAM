@@ -89,10 +89,14 @@ export interface ChatMessage {
   timestamp: string;
   read: boolean;
   createdAt?: string;
+  reaction?: string;
+  reactions?: Record<string, string>; // userId -> emoji
 }
 
 export interface CallState {
   active: boolean;
+  callId?: string;
+  isCaller?: boolean;
   type: 'voice' | 'video';
   contact: User | null;
   status: 'calling' | 'ringing' | 'connected' | 'ended';
@@ -100,6 +104,13 @@ export interface CallState {
   isCameraOff: boolean;
   isScreenSharing: boolean;
   duration: number;
+}
+
+export interface IncomingCallNotification {
+  callId: string;
+  caller: User;
+  type: 'voice' | 'video';
+  createdAt: string;
 }
 
 export interface NotificationItem {

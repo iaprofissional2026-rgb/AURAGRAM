@@ -95,6 +95,26 @@
         "read": { "type": "boolean" }
       },
       "required": ["id", "senderId", "recipientId", "participants", "type", "content"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Real-time WebRTC audio or video call signaling",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerAvatar": { "type": "string" },
+        "calleeId": { "type": "string" },
+        "calleeName": { "type": "string" },
+        "calleeAvatar": { "type": "string" },
+        "type": { "type": "string", "enum": ["voice", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "accepted", "rejected", "ended"] },
+        "offer": { "type": "object" },
+        "answer": { "type": "object" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "callerId", "calleeId", "type", "status"]
     }
   },
   "firestore": {
@@ -117,6 +137,10 @@
     "/messages/{messageId}": {
       "schema": "Message",
       "description": "Direct chat messages"
+    },
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "WebRTC call signaling"
     }
   }
 }

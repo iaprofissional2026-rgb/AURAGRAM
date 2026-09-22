@@ -33,7 +33,7 @@ import {
   INITIAL_REELS, 
   INITIAL_NOTIFICATIONS 
 } from './initialData';
-import { User, Post, Story, Reel, ChatMessage, NotificationItem, CallState } from './types';
+import { User, Post, Story, Reel, ChatMessage, NotificationItem, CallState, IncomingCallNotification } from './types';
 import { AuthScreen } from './components/AuthScreen';
 import { Navigation } from './components/Navigation';
 import { Feed } from './components/Feed';
@@ -45,6 +45,7 @@ import { StoriesViewer } from './components/StoriesViewer';
 import { StoryCreator } from './components/StoryCreator';
 import { CreatePostModal } from './components/CreatePostModal';
 import { CallingModal } from './components/CallingModal';
+import { IncomingCallModal } from './components/IncomingCallModal';
 import { NotificationsModal } from './components/NotificationsModal';
 import { PostDetailModal } from './components/PostDetailModal';
 import { Sparkles, Loader2 } from 'lucide-react';
@@ -73,6 +74,7 @@ export default function App() {
   const [selectedPostForDetail, setSelectedPostForDetail] = useState<Post | null>(null);
   const [selectedChatContact, setSelectedChatContact] = useState<User | null>(null);
   const [selectedViewedUser, setSelectedViewedUser] = useState<User | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCallNotification | null>(null);
   const [showNotificationsModal, setShowNotificationsModal] = useState<boolean>(false);
 
   // Real-Time WebRTC Call State
@@ -262,6 +264,7 @@ export default function App() {
             timestamp: data.timestamp || 'agora',
             read: data.read ?? true,
             audioDuration: data.audioDuration,
+            reaction: data.reaction,
           });
         }
       });
@@ -272,6 +275,64 @@ export default function App() {
 
     return () => unsub();
   }, [authUser?.uid]);
+
+  // 7. Real-time listener for incoming WebRTC calls addressed to current user
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const callsQuery = query(
+      collection(db, 'calls'),
+      where('calleeId', '==', currentUser.id),
+      where('status', '==', 'ringing')
+    );
+
+    const unsub = onSnapshot(callsQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        // Find most recent ringing call
+        const validDocs = snapshot.docs.filter((docSnap) => {
+          const data = docSnap.data();
+          if (!data.createdAt) return true;
+          const createdTime = new Date(data.createdAt).getTime();
+          // Only show calls initiated within the last 60 seconds
+          return (Date.now() - createdTime) < 60000;
+        });
+
+        if (validDocs.length > 0) {
+          const callDoc = validDocs[0];
+          const data = callDoc.data();
+
+          // Only alert if we aren't currently already in a call
+          if (!callState.active) {
+            setIncomingCall({
+              callId: callDoc.id,
+              caller: {
+                id: data.callerId,
+                name: data.callerName || 'Usuário AuraGram',
+                username: data.callerUsername || 'usuario',
+                avatar: data.callerAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${data.callerId}`,
+                email: '',
+                bio: '',
+                followersCount: 0,
+                followingCount: 0,
+                postsCount: 0,
+                isOnline: true,
+              },
+              type: data.type || 'video',
+              createdAt: data.createdAt,
+            });
+          }
+        } else {
+          setIncomingCall(null);
+        }
+      } else {
+        setIncomingCall(null);
+      }
+    }, (err) => {
+      console.warn('Error listening for incoming calls', err);
+    });
+
+    return () => unsub();
+  }, [currentUser?.id, callState.active]);
 
   // Compute contacts: all other real registered users + mock seed contacts to explore
   const otherRegisteredUsers = registeredUsers.filter((u) => u.id !== currentUser?.id);
@@ -547,6 +608,13 @@ export default function App() {
   ) => {
     if (!currentUser) return;
 
+    // Check if following recipient
+    const isFollowing = (currentUser.following || []).includes(recipientId);
+    if (!isFollowing) {
+      alert('Você só pode enviar mensagens para quem estiver seguindo no AuraGram!');
+      return;
+    }
+
     const date = new Date();
     const timestamp = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
     const localId = `msg_${Date.now()}`;
@@ -611,10 +679,23 @@ export default function App() {
     }
   };
 
-  // Start Real Video or Voice Call
-  const handleStartCall = (contact: User, type: 'voice' | 'video') => {
+  // Start Real Video or Voice Call with Firestore Signaling
+  const handleStartCall = async (contact: User, type: 'voice' | 'video') => {
+    if (!currentUser) return;
+
+    // Must be following contact to initiate a call
+    const isFollowing = (currentUser.following || []).includes(contact.id);
+    if (!isFollowing) {
+      alert(`Você só pode ligar para quem estiver seguindo no AuraGram! Siga @${contact.username} primeiro.`);
+      return;
+    }
+
+    const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
     setCallState({
       active: true,
+      callId,
+      isCaller: true,
       type,
       contact,
       status: 'calling',
@@ -623,19 +704,109 @@ export default function App() {
       isScreenSharing: false,
       duration: 0,
     });
+
+    try {
+      await setDoc(doc(db, 'calls', callId), {
+        id: callId,
+        callerId: currentUser.id,
+        callerName: currentUser.name,
+        callerUsername: currentUser.username,
+        callerAvatar: currentUser.avatar,
+        calleeId: contact.id,
+        calleeName: contact.name,
+        calleeUsername: contact.username,
+        calleeAvatar: contact.avatar,
+        type,
+        status: 'ringing',
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn('Could not initialize call doc in Firestore', err);
+    }
+  };
+
+  const handleAcceptIncomingCall = async () => {
+    if (!incomingCall) return;
+    const { callId, caller, type } = incomingCall;
+    setIncomingCall(null);
+    setCallState({
+      active: true,
+      callId,
+      isCaller: false,
+      type,
+      contact: caller,
+      status: 'connected',
+      isMuted: false,
+      isCameraOff: false,
+      isScreenSharing: false,
+      duration: 0,
+    });
+
+    try {
+      await setDoc(doc(db, 'calls', callId), {
+        status: 'accepted',
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Could not update call doc to accepted in Firestore', err);
+    }
+  };
+
+  const handleDeclineIncomingCall = async () => {
+    if (!incomingCall) return;
+    const callId = incomingCall.callId;
+    setIncomingCall(null);
+    try {
+      await setDoc(doc(db, 'calls', callId), {
+        status: 'rejected',
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Error declining call', err);
+    }
   };
 
   const handleOpenQuickCall = () => {
-    const defaultContact = contacts[0] || CONTACTS[0];
-    handleStartCall(defaultContact, 'video');
+    setCurrentTab('messages');
   };
 
-  const handleEndCall = () => {
+  const handleEndCall = async () => {
+    const currentCallId = callState.callId;
     setCallState((prev) => ({
       ...prev,
       active: false,
       status: 'ended',
     }));
+
+    if (currentCallId) {
+      try {
+        await updateDoc(doc(db, 'calls', currentCallId), {
+          status: 'ended',
+        });
+      } catch (err) {
+        console.warn('Error ending call in Firestore', err);
+      }
+    }
+  };
+
+  const handleReactMessage = async (messageId: string, emoji: string) => {
+    setMessagesMap((prev) => {
+      const copy = { ...prev };
+      for (const k in copy) {
+        copy[k] = copy[k].map((m) =>
+          m.id === messageId ? { ...m, reaction: emoji } : m
+        );
+      }
+      return copy;
+    });
+
+    try {
+      const msgRef = doc(db, 'messages', messageId);
+      const snap = await getDoc(msgRef);
+      if (snap.exists()) {
+        await updateDoc(msgRef, { reaction: emoji });
+      }
+    } catch (e) {
+      console.warn('Could not update message reaction in Firestore', e);
+    }
   };
 
   const handleReplyStory = (authorId: string, text: string) => {
@@ -759,6 +930,9 @@ export default function App() {
               onSendMessage={handleSendMessage}
               onStartCall={handleStartCall}
               initialSelectedUser={selectedChatContact}
+              onReactMessage={handleReactMessage}
+              followingMap={followingMap}
+              onFollowUser={handleFollowUser}
             />
           </div>
         )}
@@ -847,6 +1021,15 @@ export default function App() {
         <NotificationsModal
           notifications={notifications}
           onClose={() => setShowNotificationsModal(false)}
+        />
+      )}
+
+      {/* Real-time Incoming Call Modal (rings on callee's device) */}
+      {incomingCall && !callState.active && (
+        <IncomingCallModal
+          incomingCall={incomingCall}
+          onAccept={handleAcceptIncomingCall}
+          onDecline={handleDeclineIncomingCall}
         />
       )}
 

@@ -101,9 +101,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
       };
 
       try {
-        await setDoc(userDocRef, newUser);
+        await setDoc(userDocRef, newUser, { merge: true });
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'users');
+        console.warn('Could not write user profile to Firestore:', err);
       }
       return newUser;
     }
@@ -128,13 +128,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
     setIsLoading(true);
 
     try {
-      // 1. Double check username uniqueness in Firestore
-      const q = query(collection(db, 'users'), where('username', '==', cleanUsername));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        setErrorMessage(`O nome de usuário @${cleanUsername} já está em uso. Escolha outro.`);
-        setIsLoading(false);
-        return;
+      // 1. Check username uniqueness in Firestore
+      try {
+        const q = query(collection(db, 'users'), where('username', '==', cleanUsername));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          setErrorMessage(`O nome de usuário @${cleanUsername} já está em uso. Escolha outro.`);
+          setIsLoading(false);
+          return;
+        }
+      } catch (checkErr) {
+        console.warn('Username uniqueness check warning:', checkErr);
       }
 
       // 2. Create user with Firebase Auth
@@ -162,6 +166,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
         setErrorMessage('Formato de e-mail inválido.');
       } else if (err.code === 'auth/weak-password') {
         setErrorMessage('A senha é muito fraca. Digite pelo menos 6 dígitos.');
+      } else if (err.code === 'permission-denied' || err.message?.includes('Missing or insufficient permissions')) {
+        setErrorMessage('Permissão no Firestore atualizada. Tente novamente.');
       } else {
         console.warn('Registration issue:', err?.message || err);
         setErrorMessage(err.message || 'Erro ao realizar cadastro.');
